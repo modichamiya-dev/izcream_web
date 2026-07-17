@@ -34,12 +34,14 @@ SUPPORT_CHANNEL = env("DISCORD_CHANNEL_ID", "SUPPORT_CHANNEL_ID", "CHANNEL_ID")
 LOG_CHANNEL = env("DISCORD_LOG_CHANNEL", "DISCORD_LOG_CHANNEL_ID", "LOG_CHANNEL_ID")
 STAFF_ROLE = env("DISCORD_STAFF_ROLE_ID", "STAFF_ROLE_ID")
 WEBHOOK_URL = env("DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK", "WEBHOOK_URL")
+IZCREAM_LOGO_URL = env("IZCREAM_LOGO_URL") or "https://izcream.gg/storage/site/logos/images/68daaaad297d7.webp"
 EXPLICIT_SESSION_SECRET = env("SESSION_SECRET")
 SESSION_SECRET = EXPLICIT_SESSION_SECRET or (
     hashlib.sha256(f"izcream-vercel-session:{BOT_TOKEN}".encode()).hexdigest()
     if BOT_TOKEN else ""
 )
 SETUP_SECRET = env("SETUP_SECRET")
+CRON_SECRET = env("CRON_SECRET")
 
 
 def now_ms() -> int:
@@ -195,7 +197,12 @@ def send_visitor(thread_id: str, username: str, message: str) -> None:
         separator = "&" if "?" in WEBHOOK_URL else "?"
         response = requests.post(
             f"{WEBHOOK_URL}{separator}wait=true&thread_id={quote(thread_id)}",
-            json={"username": clean(username, 80), "content": markdown(message, 1800), "allowed_mentions": {"parse": []}},
+            json={
+                "username": clean(username, 80),
+                "avatar_url": IZCREAM_LOGO_URL,
+                "content": markdown(message, 1800),
+                "allowed_mentions": {"parse": []},
+            },
             timeout=12,
         )
         if response.ok:
@@ -209,7 +216,15 @@ def send_visitor(thread_id: str, username: str, message: str) -> None:
 def open_or_read_ticket(body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     existing = read_session(body.get("sessionId"))
     if existing and existing.get("threadId"):
-        return existing, False
+        try:
+            state = ticket_thread_state(existing)
+            if not state["closed"]:
+                if state["archived"]:
+                    discord("PATCH", f"/channels/{existing['threadId']}", {"archived": False})
+                return existing, False
+        except RuntimeError as error:
+            if "failed with 404" not in str(error):
+                raise
     username = clean(body.get("rainbetUsername") or body.get("name"), 32)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", username):
         raise ValueError("Invalid Rainbet username")
@@ -248,6 +263,85 @@ def staff_replies(ticket: dict[str, Any], after: int) -> list[dict[str, Any]]:
             "createdAt": created,
         })
     return replies
+
+
+def ticket_thread_state(ticket: dict[str, Any]) -> dict[str, bool]:
+    channel = discord("GET", f"/channels/{ticket['threadId']}")
+    metadata = channel.get("thread_metadata") or {}
+    return {
+        "closed": bool(metadata.get("locked")),
+        "archived": bool(metadata.get("archived")),
+    }
+
+
+def chat_history(ticket: dict[str, Any]) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    username = clean(ticket.get("username"), 80)
+    visitor_prefix = f"**{username}:**"
+    for message in thread_messages(str(ticket["threadId"])):
+        author = message.get("author") or {}
+        content = str(message.get("content") or "").strip()
+        attachments = message.get("attachments") or []
+        if attachments:
+            content += ("\n" if content else "") + "\n".join(str(item.get("url") or "") for item in attachments)
+
+        if message.get("webhook_id"):
+            role = "user"
+            name = username
+        elif author.get("bot") and content.startswith(visitor_prefix):
+            role = "user"
+            name = username
+            content = content[len(visitor_prefix):].strip()
+        elif not author.get("bot"):
+            role = "staff"
+            name = clean(author.get("global_name") or author.get("username") or "Staff", 60)
+        else:
+            continue
+
+        if content:
+            history.append({
+                "id": str(message.get("id")),
+                "role": role,
+                "text": content,
+                "name": name,
+                "createdAt": parse_discord_time(message.get("timestamp")),
+            })
+    return history
+
+
+def process_text_close_command(ticket: dict[str, Any]) -> str | None:
+    messages = discord("GET", f"/channels/{ticket['threadId']}/messages?limit=25") or []
+    for message in messages:
+        author = message.get("author") or {}
+        if author.get("bot") or message.get("webhook_id"):
+            continue
+        if clean(message.get("content"), 40).lower() != "!close":
+            continue
+        closed_by = clean(author.get("global_name") or author.get("username") or "IZCREAM Staff", 80)
+        close_ticket(str(ticket["threadId"]), closed_by)
+        return closed_by
+    return None
+
+
+def scan_active_threads_for_close() -> dict[str, Any]:
+    parent = discord("GET", f"/channels/{SUPPORT_CHANNEL}")
+    guild_id = str(parent.get("guild_id") or "")
+    active = discord("GET", f"/guilds/{guild_id}/threads/active") or {}
+    checked = 0
+    closed: list[str] = []
+    errors: list[str] = []
+    for thread in active.get("threads", []):
+        thread_id = str(thread.get("id") or "")
+        if not thread_id or str(thread.get("parent_id") or "") != SUPPORT_CHANNEL:
+            continue
+        checked += 1
+        try:
+            ticket = metadata_from_thread(thread_id)
+            if process_text_close_command(ticket):
+                closed.append(thread_id)
+        except Exception as error:
+            errors.append(f"{thread_id}: {str(error)[:120]}")
+    return {"checked": checked, "closed": closed, "errors": errors}
 
 
 def thread_messages(thread_id: str) -> list[dict[str, Any]]:
@@ -314,12 +408,14 @@ def close_ticket(thread_id: str, closed_by: str) -> None:
     target = LOG_CHANNEL or thread_id
     payload = event_components(
         "Ticket closed and logged",
-        f"**Rainbet:** `{ticket['username']}`",
-        f"**Category:** {ticket['category']}",
-        f"**Session:** `{ticket['id']}`",
-        f"**Support thread:** <#{thread_id}>",
-        f"**Closed by:** {closed_by}",
-        f"The complete transcript is attached below.",
+        (
+            f"**Rainbet:** `{ticket['username']}`\n"
+            f"**Category:** {ticket['category']}\n"
+            f"**Session:** `{ticket['id']}`\n"
+            f"**Support thread:** <#{thread_id}>\n"
+            f"**Closed by:** {closed_by}\n\n"
+            "The complete transcript is attached below."
+        ),
         0xED4245,
     )
     payload["attachments"] = [{"id": 0, "filename": filename, "description": "IZCREAM ticket transcript"}]
