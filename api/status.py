@@ -1,7 +1,7 @@
 from http.server import BaseHTTPRequestHandler
 
 from lib.core import (
-    BOT_TOKEN, EXPLICIT_SESSION_SECRET, LOG_CHANNEL, SESSION_SECRET, SETUP_SECRET,
+    BOT_TOKEN, CRON_SECRET, EXPLICIT_SESSION_SECRET, LOG_CHANNEL, SESSION_SECRET, SETUP_SECRET,
     STAFF_ROLE, SUPPORT_CHANNEL, WEBHOOK_URL, env, json_response,
 )
 
@@ -11,7 +11,7 @@ class handler(BaseHTTPRequestHandler):
         json_response(self, 200, {
             "success": True,
             "runtime": "vercel-serverless-python",
-            "buildVersion": "2026-07-17-resumable-tickets-1",
+            "buildVersion": "2026-07-17-text-close-1",
             "botTokenConfigured": bool(BOT_TOKEN),
             "channelConfigured": bool(SUPPORT_CHANNEL),
             "logChannelConfigured": bool(LOG_CHANNEL),
@@ -21,5 +21,6 @@ class handler(BaseHTTPRequestHandler):
             "sessionSecretSource": "environment" if EXPLICIT_SESSION_SECRET else ("bot-token-derived" if SESSION_SECRET else "missing"),
             "discordPublicKeyConfigured": bool(env("DISCORD_PUBLIC_KEY")),
             "setupSecretConfigured": bool(SETUP_SECRET),
+            "closeScannerConfigured": bool(CRON_SECRET),
             "gatewayStatus": "not-available-on-serverless",
         })
