@@ -403,9 +403,10 @@ def close_ticket(thread_id: str, closed_by: str) -> None:
     channel = discord("GET", f"/channels/{thread_id}")
     if str(channel.get("parent_id") or "") != SUPPORT_CHANNEL:
         raise RuntimeError("This command can only close IZCREAM support threads")
+    if not LOG_CHANNEL:
+        raise RuntimeError("DISCORD_LOG_CHANNEL is not configured; the thread was not deleted")
     ticket = metadata_from_thread(thread_id)
     filename, raw = transcript(thread_id, ticket, clean(closed_by, 80) or "IZCREAM Staff")
-    target = LOG_CHANNEL or thread_id
     payload = event_components(
         "Ticket closed and logged",
         (
@@ -421,7 +422,7 @@ def close_ticket(thread_id: str, closed_by: str) -> None:
     payload["attachments"] = [{"id": 0, "filename": filename, "description": "IZCREAM ticket transcript"}]
     payload["components"].append({"type": 13, "file": {"url": f"attachment://{filename}"}, "spoiler": False})
     response = requests.post(
-        f"{DISCORD_API}/channels/{target}/messages",
+        f"{DISCORD_API}/channels/{LOG_CHANNEL}/messages",
         headers={"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "IZCREAM-Vercel/1.0"},
         data={"payload_json": json.dumps(payload)},
         files={"files[0]": (filename, raw, "text/plain")},
@@ -429,11 +430,7 @@ def close_ticket(thread_id: str, closed_by: str) -> None:
     )
     if not response.ok:
         raise RuntimeError(f"Transcript upload failed with {response.status_code}: {response.text[:180]}")
-    if target != thread_id:
-        discord("POST", f"/channels/{thread_id}/messages", event_components(
-            "Support thread closed", f"Closed by **{closed_by}**. The transcript was sent to the staff log channel.", 0xED4245
-        ))
-    discord("PATCH", f"/channels/{thread_id}", {"archived": True, "locked": True})
+    discord("DELETE", f"/channels/{thread_id}")
 
 
 def json_response(handler: Any, status: int, payload: dict[str, Any]) -> None:
