@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler
+import traceback
 
 from lib.core import clean, discord, event_components, json_response, read_json, read_session, same_origin
 
@@ -21,4 +22,5 @@ class handler(BaseHTTPRequestHandler):
             ))
             json_response(self, 200, {"success": True, "notified": True})
         except Exception as error:
+            traceback.print_exc()
             json_response(self, 200, {"success": False, "error": str(error)})
