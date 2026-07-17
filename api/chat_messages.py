@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler
+import traceback
 from urllib.parse import parse_qs, urlparse
 
 from lib.core import json_response, read_session, staff_replies
@@ -24,4 +25,5 @@ class handler(BaseHTTPRequestHandler):
                 "staffRepliesEnabled": True,
             })
         except Exception as error:
+            traceback.print_exc()
             json_response(self, 502, {"success": False, "error": str(error), "messages": []})
