@@ -11,7 +11,7 @@ class handler(BaseHTTPRequestHandler):
         json_response(self, 200, {
             "success": True,
             "runtime": "vercel-serverless-python",
-            "buildVersion": "2026-07-17-text-close-1",
+            "buildVersion": "2026-07-17-delete-closed-thread-1",
             "botTokenConfigured": bool(BOT_TOKEN),
             "channelConfigured": bool(SUPPORT_CHANNEL),
             "logChannelConfigured": bool(LOG_CHANNEL),
