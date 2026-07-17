@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler
+import traceback
 
 from lib.core import clean, json_response, open_or_read_ticket, read_json, same_origin, send_visitor, sign_session
 
@@ -25,4 +26,5 @@ class handler(BaseHTTPRequestHandler):
         except ValueError as error:
             json_response(self, 400, {"success": False, "error": str(error)})
         except Exception as error:
+            traceback.print_exc()
             json_response(self, 502, {"success": False, "error": str(error)})
