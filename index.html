@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -1487,6 +1487,60 @@ function saveSupportState(){
   }));
 }
 
+function clearSavedSupportSession(){
+  supportState.sessionId='';
+  supportState.lastSeenAt=0;
+  supportState.staffNoticeShown=false;
+  saveSupportState();
+}
+
+function showActiveStaffChat(){
+  supportState.mode='staff';
+  supportState.staffNoticeShown=true;
+  document.getElementById('quick-btns').style.display='none';
+  document.getElementById('chat-intake').classList.remove('show');
+  document.getElementById('chat-input-row').classList.remove('is-disabled');
+  document.getElementById('chat-input').placeholder='Write your message for staff...';
+  saveSupportState();
+}
+
+function handleClosedSupportSession(){
+  clearInterval(supportState.pollTimer);
+  clearSavedSupportSession();
+  supportState.mode=null;
+  document.getElementById('chat-input-row').classList.add('is-disabled');
+  renderStartChoices();
+  document.getElementById('quick-btns').style.display='flex';
+  addMsg('Your previous staff conversation was closed. Start a new staff chat when you need more help.','bot');
+}
+
+function resumeSupportSession(){
+  if(!supportState.sessionId) return;
+  fetch(`/api/chat/messages?sessionId=${encodeURIComponent(supportState.sessionId)}&history=1`,{
+    headers:{'Accept':'application/json'}
+  })
+    .then((response)=>response.ok ? response.json() : null)
+    .then((payload)=>{
+      if(!payload) return;
+      if(payload.invalidSession){
+        clearSavedSupportSession();
+        return;
+      }
+      if(payload.closed){
+        handleClosedSupportSession();
+        return;
+      }
+      showActiveStaffChat();
+      const box=document.getElementById('chat-msgs');
+      box.innerHTML='';
+      supportState.lastSeenAt=0;
+      renderServerMessages(payload.messages || [],true);
+      addMsg('Welcome back. Your existing staff conversation has been restored.','bot');
+      pollStaffReplies();
+    })
+    .catch(()=>{});
+}
+
 function notifySupportDisconnect(reason){
   if(supportState.mode!=='staff' || !supportState.sessionId || !supportState.staffNoticeShown) return;
   const payload=JSON.stringify({sessionId:supportState.sessionId,reason});
@@ -1598,14 +1652,14 @@ function addMsg(text,role){
   div.innerHTML=`<div class="msg-bubble">${formatted}</div><div class="msg-time">${now}</div>`;
   box.appendChild(div);
   box.scrollTop=box.scrollHeight;
-  supportState.lastSeenAt=Date.now();
+  supportState.lastSeenAt=Math.max(supportState.lastSeenAt,Date.now());
 }
 
-function renderServerMessages(messages){
+function renderServerMessages(messages,includeUser=false){
   const box=document.getElementById('chat-msgs');
   const existing=new Set([...box.querySelectorAll('[data-message-id]')].map((node)=>node.dataset.messageId));
   (messages || []).forEach((message)=>{
-    if(message.role==='user') return;
+    if(message.role==='user'&&!includeUser) return;
     if(existing.has(message.id)) return;
     const name=message.role==='staff' && message.name ? `${message.name} · IzCream Staff\n` : '';
     const div=document.createElement('div');
@@ -1628,7 +1682,17 @@ function pollStaffReplies(){
       headers:{'Accept':'application/json'}
     })
       .then((response)=>response.ok ? response.json() : null)
-      .then((payload)=>payload?.messages && renderServerMessages(payload.messages))
+      .then((payload)=>{
+        if(payload?.closed){
+          handleClosedSupportSession();
+          return;
+        }
+        if(payload?.invalidSession){
+          clearSavedSupportSession();
+          return;
+        }
+        if(payload?.messages) renderServerMessages(payload.messages);
+      })
       .catch(()=>{});
   },4000);
 }
@@ -1736,6 +1800,7 @@ function quickAsk(q){
 function handleKey(e){
   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}
 }
+document.addEventListener('DOMContentLoaded',resumeSupportSession);
 </script>
 </body>
 </html>
